@@ -1,4 +1,4 @@
-package com.nokia;
+package com.pk;
 
 import org.apache.ignite.Ignite;
 import org.apache.ignite.IgniteAtomicSequence;
