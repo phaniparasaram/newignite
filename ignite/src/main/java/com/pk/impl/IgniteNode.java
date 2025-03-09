@@ -1,10 +1,6 @@
 package com.pk.impl;
 
-import org.apache.ignite.Ignite;
-import org.apache.ignite.IgniteAtomicSequence;
-import org.apache.ignite.IgniteCache;
-import org.apache.ignite.IgniteEvents;
-import org.apache.ignite.Ignition;
+import org.apache.ignite.*;
 import org.apache.ignite.cache.CacheMode;
 import org.apache.ignite.cache.CacheRebalanceMode;
 import org.apache.ignite.cache.CacheWriteSynchronizationMode;
@@ -23,10 +19,13 @@ import com.pk.enums.FinderMode;
 import com.pk.enums.NodeRole;
 import com.pk.interfaces.Node;
 
+import java.util.UUID;
+
 public class IgniteNode implements Node{
     private IgniteConfiguration cfg ;
     private CacheConfiguration cacheCfg;
     private Ignite ignite;
+    private String leader=null;
     private NodeRole noderole;
     private String cacheName;
     IgniteCache<String, String> cache;
@@ -42,6 +41,7 @@ public class IgniteNode implements Node{
         //cacheCfg.setPartitionLossPolicy(PartitionLossPolicy.READ_ONLY_SAFE);
         //cacheCfg.setAtomicityMode(CacheAtomicityMode.TRANSACTIONAL);
         cfg.setCacheConfiguration(cacheCfg);
+        cfg.setNodeId(UUID.randomUUID());
         this.cacheName = cacheName;
         TcpDiscoverySpi discoverySpi = new TcpDiscoverySpi();       
         TcpDiscoveryIpFinder ipFinder = fm == FinderMode.Multicast ? new TcpDiscoveryMulticastIpFinder() : new TcpDiscoveryVmIpFinder();
@@ -60,20 +60,39 @@ public class IgniteNode implements Node{
     }
 
     private void competeForLeader(){
-        IgniteAtomicSequence sequence = ignite.atomicSequence("leaderElectionSeq", 0, true);
-        long x = sequence.incrementAndGet();
-        // Perform the leader election
-        if (x == 1) {
+        IgniteAtomicReference<String> leaderRef = ignite.atomicReference("leader", leader, true);
+        System.out.println(ignite.configuration().getNodeId() );
+        // Check if the current node is the leader
+        if (leaderRef.compareAndSet(leader, ignite.configuration().getNodeId().toString())) {
             noderole = NodeRole.Leader;
-            System.out.println("This node is the leader!" + x);
+            System.out.println("This node has been elected as the leader!");
+            leader = ignite.configuration().getNodeId().toString();
+            System.out.println("LeaderNode:" + leader);
             createCache();
-            
         } else {
             noderole = NodeRole.Follower;
+            leader = leaderRef.get();
+            System.out.println("This node is not the leader.");
+            System.out.println("LeaderNode:" + leader);
             getCache();
-            System.out.println("This node is a follower." + x);
         }
     }
+
+//    private void competeForLeader(){
+//        IgniteAtomicSequence sequence = ignite.atomicSequence("leaderElectionSeq", 0, true);
+//        long x = sequence.incrementAndGet();
+//        // Perform the leader election
+//        if (x == 1) {
+//            noderole = NodeRole.Leader;
+//            System.out.println("This node is the leader!" + x);
+//            createCache();
+//
+//        } else {
+//            noderole = NodeRole.Follower;
+//            getCache();
+//            System.out.println("This node is a follower." + x);
+//        }
+//    }
 
     @Override
     public boolean isLeader() {
@@ -129,9 +148,20 @@ public class IgniteNode implements Node{
         EventType.EVT_CACHE_OBJECT_REMOVED);
         
         IgnitePredicate<DiscoveryEvent> localListener2 = evt -> {
-            System.out.println("Received event [evt=" + evt.name() + ", key=" + ", oldVal=" + "Old"
+            System.out.println("Received event [evt=" + evt.name() + ", key=" + evt.eventNode().toString() + "Old"
                     + ", newVal=" + evt.message());
-            competeForLeader();
+            String event = evt.name();
+            if(event.contains("LEFT")){
+                System.out.println("Node left event");
+                String nodeName = evt.eventNode().id().toString();
+
+                System.out.println("Left node:" + nodeName);
+                if (leader.equals(nodeName)){
+                    System.out.println("Leader Left");
+                    competeForLeader();
+                }
+            }
+
             return true; // Continue listening.
         };
 
